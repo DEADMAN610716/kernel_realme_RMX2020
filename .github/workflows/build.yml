@@ -93,54 +93,107 @@ jobs:
         run: |
           set -euo pipefail
           cat > nethunter.fragment <<'EOF'
+          # Module loading
           CONFIG_MODULES=y
           CONFIG_MODULE_UNLOAD=y
           CONFIG_MODULE_FORCE_UNLOAD=y
           CONFIG_MODULE_SIG=n
+
+          # Core wireless stack (built in)
           CONFIG_WLAN=y
           CONFIG_CFG80211=y
           CONFIG_CFG80211_WEXT=y
           CONFIG_MAC80211=y
-          CONFIG_ATH9K_HTC=m
+          CONFIG_USB_NET_DRIVERS=y
+
+          # Atheros Wi-Fi (modules)
+          CONFIG_ATH5K=m
+          CONFIG_ATH6KL=m
           CONFIG_ATH9K=m
+          CONFIG_ATH9K_HTC=m
           CONFIG_ATH9K_COMMON=m
           CONFIG_ATH9K_HW=m
+          CONFIG_ATH10K=m
+          CONFIG_CARL9170=m
+
+          # Ralink / MediaTek USB Wi-Fi (modules)
           CONFIG_RT2X00=m
-          CONFIG_RT2800USB=m
+          CONFIG_RT2500USB=m
           CONFIG_RT73USB=m
-          CONFIG_RTL8187=m
-          CONFIG_RTL8XXXU=m
+          CONFIG_RT2800USB=m
           CONFIG_MT76_USB=m
           CONFIG_MT7601U=m
           CONFIG_MT76x0U=m
           CONFIG_MT76x2U=m
+
+          # Realtek Wi-Fi (modules)
+          CONFIG_RTL8187=m
+          CONFIG_RTL8XXXU=m
+          CONFIG_RTW88=m
+          CONFIG_RTL8192CU=m
+
+          # Other USB Wi-Fi (modules)
+          CONFIG_ZD1211RW=m
+          CONFIG_LIBERTAS=m
+          CONFIG_MWIFIEX=m
+
+          # USB gadget (built in)
           CONFIG_USB_GADGET=y
           CONFIG_USB_CONFIGFS=y
           CONFIG_USB_CONFIGFS_MASS_STORAGE=y
           CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_USB_F_HID=y
           CONFIG_USB_CONFIGFS_F_FS=y
+          CONFIG_USB_CONFIGFS_NCM=y
+          CONFIG_USB_CONFIGFS_ECM=y
+          CONFIG_USB_CONFIGFS_RNDIS=y
+          CONFIG_USB_CONFIGFS_ACM=y
+
+          # CAN bus (modules)
           CONFIG_CAN=m
           CONFIG_CAN_RAW=m
           CONFIG_CAN_BCM=m
+          CONFIG_CAN_GW=m
           CONFIG_CAN_VCAN=m
           CONFIG_CAN_SLCAN=m
+          CONFIG_CAN_PEAK_USB=m
+          CONFIG_CAN_KVASER_USB=m
+          CONFIG_CAN_8DEV_USB=m
+          CONFIG_CAN_ESD_USB=m
+          CONFIG_CAN_EMS_USB=m
+
+          # Bluetooth (modules)
           CONFIG_BT=m
-          CONFIG_BT_HIDP=m
           CONFIG_BT_RFCOMM=m
           CONFIG_BT_BNEP=m
+          CONFIG_BT_HIDP=m
           CONFIG_BT_HCIBTUSB=m
+          CONFIG_BT_HCIUART=m
+          CONFIG_BT_HCIBCM203X=m
+          CONFIG_BT_HCIBPA10X=m
+          CONFIG_BT_HCIVHCI=m
+
+          # Input, HID and gamepads (modules unless noted)
+          CONFIG_UHID=y
+          CONFIG_HIDRAW=y
+          CONFIG_HID_GENERIC=y
           CONFIG_INPUT_FF_MEMLESS=y
           CONFIG_HID_PLAYSTATION=m
           CONFIG_HID_SONY=m
-          CONFIG_HID_GENERIC=y
           CONFIG_HID_MICROSOFT=m
+          CONFIG_HID_LOGITECH=m
+          CONFIG_HID_NINTENDO=m
           CONFIG_JOYSTICK_XPAD=m
           CONFIG_JOYSTICK_XPAD_FF=y
           CONFIG_JOYSTICK_XPAD_LEDS=y
+
+          # Networking used by the NetHunter tooling (built in)
           CONFIG_TUN=y
-          CONFIG_UHID=y
-          CONFIG_HIDRAW=y
+          CONFIG_PACKET=y
+          CONFIG_NETFILTER=y
+          CONFIG_NF_NAT=m
+          CONFIG_IP_NF_IPTABLES=m
+          CONFIG_IP6_NF_IPTABLES=m
           EOF
 
       - name: Configure kernel
@@ -152,7 +205,7 @@ jobs:
           scripts/kconfig/merge_config.sh -m -O out out/.config nethunter.fragment 2>&1 | tee -a configure.log
           make O=out $MAKE_FLAGS olddefconfig 2>&1 | tee -a configure.log
 
-      - name: Check required symbols
+      - name: Check symbols
         shell: bash
         working-directory: kernel
         run: |
@@ -165,9 +218,11 @@ jobs:
               MISSING=1
             fi
           done
-          OPTIONAL="CONFIG_ATH9K_HTC CONFIG_MT76x2U CONFIG_RTL8XXXU CONFIG_CAN_SLCAN CONFIG_HID_PLAYSTATION"
-          for SYM in $OPTIONAL; do
-            grep -qE "^${SYM}=(y|m)$" out/.config || echo "::warning::Optional symbol ${SYM} not set"
+          echo "--- Module-capable symbols that were NOT enabled ---"
+          for SYM in $(grep -oE '^CONFIG_[A-Z0-9_]+=m' nethunter.fragment | cut -d= -f1); do
+            if ! grep -qE "^${SYM}=m$" out/.config; then
+              echo "::warning::${SYM} was not built as a module (not in this source tree?)"
+            fi
           done
           exit $MISSING
 
@@ -201,60 +256,107 @@ jobs:
           ls -la "$BOOT" || true
           exit 1
 
-      - name: Package AnyKernel3 zip
+      - name: Package kernel zip (AnyKernel3)
         shell: bash
         run: |
           set -euo pipefail
           KVER=$(cat "$GITHUB_WORKSPACE/kernel/out/include/config/kernel.release")
+          echo "KVER=$KVER" >> "$GITHUB_ENV"
           cd "$GITHUB_WORKSPACE/AnyKernel3"
-          # Keep the device check enabled; only set the device names if the keys exist.
+          # Keep the device check on. Set the device names only if the keys exist.
           if grep -q '^device.name1=' anykernel.sh; then
             sed -i 's/^device.name1=.*/device.name1=RMX2020/' anykernel.sh
           fi
-          ZIP="NH-Narzo30A20-${KVER}.zip"
+          ZIP="NH-kernel-Narzo30A20-${KVER}.zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP" . -x ".git*" -x "README*"
-          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+          echo "KERNEL_ZIP=$ZIP" >> "$GITHUB_ENV"
 
-      - name: Package module zip
+      - name: Package module zip (root manager + recovery)
         shell: bash
         run: |
           set -euo pipefail
-          KVER=$(cat "$GITHUB_WORKSPACE/kernel/out/include/config/kernel.release")
+          MOD_SRC="$GITHUB_WORKSPACE/modules_out/lib/modules"
+          COUNT=$(find "$MOD_SRC" -name '*.ko' 2>/dev/null | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::Build produced zero .ko files. Modules were not compiled."
+            exit 1
+          fi
+          echo "Packaging $COUNT modules"
+
           MOD_DIR="$GITHUB_WORKSPACE/nh_modules"
           rm -rf "$MOD_DIR"
           mkdir -p "$MOD_DIR/system/lib/modules"
-          COUNT=$(find "$GITHUB_WORKSPACE/modules_out/lib/modules" -name '*.ko' | wc -l)
-          if [ "$COUNT" -eq 0 ]; then
-            echo "::error::No .ko files were produced"
-            exit 1
-          fi
-          find "$GITHUB_WORKSPACE/modules_out/lib/modules" -name '*.ko' \
-            -exec cp {} "$MOD_DIR/system/lib/modules/" \;
+          find "$MOD_SRC" -name '*.ko' -exec cp {} "$MOD_DIR/system/lib/modules/" \;
+
+          # Root manager metadata (Magisk / KernelSU / APatch)
           cat > "$MOD_DIR/module.prop" <<EOF
-          id=nethunter_modules
+          id=nh_modules
           name=${KERNEL_NAME} modules
           version=${KVER}
           versionCode=1
           author=build
-          description=NetHunter kernel modules for ${KVER}
+          description=NetHunter kernel modules for ${KVER}. Built for this kernel only.
           EOF
-          cat > "$MOD_DIR/customize.sh" <<EOF
-          #!/system/bin/sh
-          if [ "\$(uname -r)" != "${KVER}" ]; then
-            abort "Kernel mismatch: modules were built for ${KVER}"
-          fi
-          EOF
-          cd "$MOD_DIR"
-          zip -r9 "$GITHUB_WORKSPACE/NH-modules-${KVER}.zip" .
-          echo "Packaged $COUNT modules"
 
-      - name: Upload artifacts
+          # Load the modules at boot, only if the running kernel matches
+          cat > "$MOD_DIR/service.sh" <<EOF
+          #!/system/bin/sh
+          MODDIR=\${0%/*}
+          [ "\$(uname -r)" = "${KVER}" ] || exit 0
+          for KO in "\$MODDIR"/system/lib/modules/*.ko; do
+            insmod "\$KO" 2>/dev/null
+          done
+          EOF
+          chmod 0755 "$MOD_DIR/service.sh"
+
+          # Recovery (TWRP and similar) install
+          mkdir -p "$MOD_DIR/META-INF/com/google/android"
+          cat > "$MOD_DIR/META-INF/com/google/android/update-binary" <<EOF
+          #!/sbin/sh
+          OUTFD=\$2
+          ZIP=\$3
+          ui_print() { echo -e "ui_print \$1\nui_print" > /proc/self/fd/\$OUTFD; }
+          ui_print "Installing ${KERNEL_NAME} modules for ${KVER}"
+          if [ "\$(cat /proc/version | grep -o 'Linux version [^ ]*')" != "Linux version ${KVER}" ]; then
+            ui_print "Warning: running kernel differs from ${KVER}"
+          fi
+          mount /system 2>/dev/null
+          rm -rf /tmp/nh_mod && mkdir -p /tmp/nh_mod
+          unzip -o "\$ZIP" 'system/*' -d /tmp/nh_mod || exit 1
+          mkdir -p /system/lib/modules
+          cp -f /tmp/nh_mod/system/lib/modules/*.ko /system/lib/modules/
+          ui_print "Done. Reboot to load modules."
+          exit 0
+          EOF
+          chmod 0755 "$MOD_DIR/META-INF/com/google/android/update-binary"
+
+          cd "$MOD_DIR"
+          MOD_ZIP="NH-modules-Narzo30A20-${KVER}.zip"
+          zip -r9 "$GITHUB_WORKSPACE/$MOD_ZIP" .
+          echo "MODULE_ZIP=$MOD_ZIP" >> "$GITHUB_ENV"
+
+      - name: Upload kernel zip
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: nh-kernel-${{ steps.defconfig.outputs.name || 'unknown' }}
+          name: NH-kernel-${{ env.KVER || 'unknown' }}
+          path: ${{ github.workspace }}/${{ env.KERNEL_ZIP }}
+          if-no-files-found: warn
+
+      - name: Upload module zip
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NH-modules-${{ env.KVER || 'unknown' }}
+          path: ${{ github.workspace }}/${{ env.MODULE_ZIP }}
+          if-no-files-found: warn
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
           path: |
-            ${{ github.workspace }}/*.zip
             ${{ github.workspace }}/kernel/configure.log
             ${{ github.workspace }}/kernel/build.log
           if-no-files-found: warn
